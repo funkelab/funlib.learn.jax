@@ -1,0 +1,4 @@
+numpy
+jax
+dm-haiku
+optax
