@@ -11,9 +11,6 @@ from funlib.learn.jax.models import UNet, ConvPass
 
 from typing import Tuple, Any, NamedTuple, Dict
 
-# some JAX installations require this to run properly
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = '0'
-
 
 '''To test model with some dummy input and output, run with command
 
@@ -29,7 +26,6 @@ for multi-device training
 # PARAMETERS
 mp_training = True  # mixed-precision training using `jmp`
 learning_rate = 0.5e-4
-pmap_sum_grads = False  # training seems to be faster with grads summing
 
 
 class Params(NamedTuple):
@@ -117,28 +113,27 @@ class Model(GenericJaxModel):
 
             raw, gt, mask = inputs['raw'], inputs['gt'], inputs['mask']
 
-            grads, (pred_affs, loss, loss_mean) = jax.grad(_loss_fn, has_aux=True)(
-                params.weight, raw, gt, mask, params.loss_scale)
+            grads, (pred_affs, loss, loss_mean) = jax.grad(
+                _loss_fn, has_aux=True)(params.weight, raw, gt, mask,
+                                        params.loss_scale)
+
+            if pmapped:
+                # sync grads, casting to compute precision (f16) for efficiency
+                grads = policy.cast_to_compute(grads)
+                grads = jax.lax.pmean(grads, axis_name='num_devices')
+                grads = policy.cast_to_param(grads)
 
             # dynamic mixed precision loss scaling
             grads = params.loss_scale.unscale(grads)
-            if pmapped:
-                # combine grads, but cast to compute precision (f16) first
-                grads = policy.cast_to_compute(grads)
-                grads = params.loss_scale.unscale(grads)
-                if pmap_sum_grads:
-                    grads = jax.lax.psum(grads, axis_name='num_devices')
-                else:
-                    grads = jax.lax.pmean(grads, axis_name='num_devices')
-                grads = policy.cast_to_param(grads)
             new_weight, new_opt_state = _apply_optimizer(params, grads)
 
-            # skip nonfinite updates (https://github.com/deepmind/jmp)
+            # if any update is non-finite, skip updates
             grads_finite = jmp.all_finite(grads)
             new_loss_scale = params.loss_scale.adjust(grads_finite)
-            new_weight, new_opt_state = jmp.select_tree(grads_finite,
-                                                        (new_weight, new_opt_state),
-                                                        (params.weight, params.opt_state))
+            new_weight, new_opt_state = jmp.select_tree(
+                                            grads_finite,
+                                            (new_weight, new_opt_state),
+                                            (params.weight, params.opt_state))
 
             new_params = Params(new_weight, new_opt_state, new_loss_scale)
             outputs = {'affs': pred_affs, 'grad': loss}

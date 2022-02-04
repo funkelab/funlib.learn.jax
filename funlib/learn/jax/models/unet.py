@@ -70,12 +70,6 @@ class Downsample(hk.Module):
         self.dims = len(downsample_factor)
         self.downsample_factor = downsample_factor
 
-        # pool = {
-        #     2: torch.nn.MaxPool2d,
-        #     3: torch.nn.MaxPool3d,
-        #     4: torch.nn.MaxPool3d  # only 3D pooling, even for 4D input
-        # }[self.dims]
-
         self.down = hk.MaxPool(
             window_shape=downsample_factor,
             strides=downsample_factor,
@@ -241,9 +235,7 @@ class UNet(hk.Module):
             downsample_factors,
             kernel_size_down=None,
             kernel_size_up=None,
-            activation='relu6',  # 220120 BUG: 'relu' doesn't compile for some
-                                 # reason so relu6 is used for now as default
-                                 # please file reports if it works for you
+            activation='relu',
             fov=(1, 1, 1),
             voxel_size=(1, 1, 1),
             num_fmaps_out=None,
